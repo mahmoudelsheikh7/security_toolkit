@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Security Toolkit: one command-line tool for Linux hardening</title>
+<style>
+:root{--bg:#eef2f5;--panel:#fff;--ink:#14212b;--mute:#4a5b68;--line:#c9d3db;--acc:#0f6e6e;--acc-ink:#fff;--code:#e2e9ee;--warn:#9a4a06;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#101a22;--panel:#182632;--ink:#e6edf2;--mute:#9db0be;--line:#2b3d4b;--acc:#4fc1b8;--acc-ink:#062523;--code:#0b131a;--warn:#f0b35a}}
+:root[data-theme="dark"]{--bg:#101a22;--panel:#182632;--ink:#e6edf2;--mute:#9db0be;--line:#2b3d4b;--acc:#4fc1b8;--acc-ink:#062523;--code:#0b131a;--warn:#f0b35a}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.6 "Source Serif 4",Georgia,"Times New Roman",serif}
+main{max-width:860px;margin:0 auto;padding:0 20px 64px}
+h1,h2,h3,button,select,.mono{font-family:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif}
+code,pre{font-family:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;font-size:.88em}
+h1{font-size:clamp(2.2rem,6vw,3.4rem);line-height:1.05;margin:56px 0 16px;letter-spacing:-.02em}
+h2{font-size:1.5rem;margin:56px 0 12px;letter-spacing:-.01em}
+h3{font-size:1.05rem;margin:0 0 4px}
+p{max-width:68ch;margin:0 0 14px}
+.lead{font-size:1.2rem;color:var(--mute)}
+a{color:var(--acc)}
+:focus-visible{outline:3px solid var(--acc);outline-offset:2px}
+pre{background:var(--code);border:1px solid var(--line);border-radius:6px;padding:14px 16px;margin:0;overflow-x:auto;white-space:pre}
+.cmd{position:relative;margin:14px 0}
+.cmd button{position:absolute;top:8px;right:8px}
+button,select{font-size:.9rem;padding:7px 12px;border-radius:6px;border:1px solid var(--line);background:var(--panel);color:var(--ink);cursor:pointer}
+.btn{display:inline-block;background:var(--acc);color:var(--acc-ink);padding:10px 18px;border-radius:6px;text-decoration:none;font-family:"IBM Plex Sans",system-ui,sans-serif;font-weight:600}
+.row{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin:18px 0}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px}
+.box{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:16px 18px}
+.box p{margin:0;color:var(--mute);font-size:.95rem}
+.picker{background:var(--panel);border:1px solid var(--acc);border-radius:10px;padding:20px}
+.picker dl{display:grid;grid-template-columns:max-content 1fr;gap:6px 18px;margin:16px 0 0}
+.picker dt{color:var(--mute)}.picker dd{margin:0}
+table{border-collapse:collapse;width:100%;font-size:.95rem}
+td,th{border-bottom:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+.scroll{overflow-x:auto}
+.warn{border-left:4px solid var(--warn);padding-left:14px;color:var(--ink)}
+ul{padding-left:1.2rem;max-width:68ch}li{margin-bottom:6px}
+footer{color:var(--mute);font-size:.9rem;margin-top:56px}
+</style>
+</head>
+<body>
+<main>
+<h1>Harden a Linux machine with one command</h1>
+<p class="lead">Security Toolkit installs common security tools, scans folders for suspicious files, and sets safe firewall defaults. It is a single C++17 program with no dependencies, and it works on Debian, Fedora, Arch, openSUSE, Alpine and Void families.</p>
+<div class="row">
+  <a class="btn" href="https://github.com/mahmoudelsheikh7/security_toolkit/archive/refs/heads/main.zip">Download ZIP</a>
+  <a href="https://github.com/mahmoudelsheikh7/security_toolkit">View on GitHub</a>
+</div>
+
+<h2>Download and build</h2>
+<p>You need a C++17 compiler (GCC 8+ or Clang 7+) and <code>make</code>. On Debian/Ubuntu install them with <code>sudo apt install g++ make git</code>; on Fedora <code>sudo dnf install gcc-c++ make git</code>; on Arch <code>sudo pacman -S gcc make git</code>.</p>
+<div class="cmd"><pre id="c1">git clone https://github.com/mahmoudelsheikh7/security_toolkit.git
+cd security_toolkit
+make
+sudo make install   # optional: installs to /usr/local/sbin</pre><button data-copy="c1">Copy</button></div>
+<p>No make? Compile directly: <code>g++ -std=c++17 -O2 security_toolkit.cpp -o security_toolkit</code>. On GCC 8, add <code>-lstdc++fs</code>.</p>
+
+<h2>What it does</h2>
+<div class="grid">
+  <div class="box"><h3>Install tools</h3><p>Detects your package manager and installs nmap, fail2ban, rkhunter, lynis, clamav, tcpdump and friends one by one, so one missing package never blocks the rest.</p></div>
+  <div class="box"><h3>Scan files</h3><p>Walks a folder and flags hidden files, executables, setuid/setgid files, world-writable files and risky extensions such as .sh, .so and .ko. Symlinks are not followed.</p></div>
+  <div class="box"><h3>Set up the firewall</h3><p>Uses ufw or firewalld: deny incoming, allow outgoing, and keep your SSH port open so you cannot lock yourself out.</p></div>
+</div>
+
+<h2>See what it will use on your system</h2>
+<div class="picker">
+  <label for="d">Choose your distribution</label>
+  <div class="row" style="margin:8px 0 0"><select id="d"></select></div>
+  <dl id="out"></dl>
+</div>
+
+<h2>Usage</h2>
+<div class="cmd"><pre id="c2">sudo ./security_toolkit                 # interactive menu
+sudo ./security_toolkit --install       # install security tools
+./security_toolkit --scan /home         # scan a folder (no root needed)
+sudo ./security_toolkit --firewall      # apply firewall defaults
+sudo ./security_toolkit --all /var      # install, scan, firewall
+./security_toolkit --help</pre><button data-copy="c2">Copy</button></div>
+<p>Add <code>--yes</code> to skip confirmation prompts, for example in scripts. Add <code>--no-color</code> for plain output. The log is written to <code>/var/log/sec_toolkit.log</code>, or to <code>~/.local/state/sec_toolkit/</code> when you are not root.</p>
+
+<h2>Safety features</h2>
+<ul>
+  <li>Reads every SSH port from <code>sshd_config</code> and your current session, and keeps them all open.</li>
+  <li>Never deletes your existing ufw rules, and asks before changing the firewall.</li>
+  <li>Runs commands without a shell, so file names and input cannot inject commands.</li>
+  <li>Skips <code>/proc</code>, <code>/sys</code> and <code>/dev</code> when scanning, and keeps going past unreadable folders.</li>
+</ul>
+<p class="warn">Test on a non-production machine first, especially the firewall step on remote servers. The scanner reports heuristics; it is not an antivirus and cannot prove a file is malicious.</p>
+
+<h2>If a package fails to install</h2>
+<div class="scroll"><table>
+<tr><th>System</th><th>Fix</th></tr>
+<tr><td>RHEL, Rocky, Alma</td><td>Enable EPEL: <code>sudo dnf install epel-release</code>. fail2ban, lynis and clamav are there.</td></tr>
+<tr><td>Arch</td><td>Run <code>sudo pacman -Syu</code> if you see 404 errors. Some tools may only exist in the AUR.</td></tr>
+<tr><td>openSUSE</td><td>lynis and rkhunter can require the security:tools or Packman repositories.</td></tr>
+<tr><td>Alpine</td><td>Enable the <code>community</code> repository in <code>/etc/apk/repositories</code>.</td></tr>
+</table></div>
+
+<footer>Provided as-is for educational and research purposes. Use at your own risk. Source and issues: <a href="https://github.com/mahmoudelsheikh7/security_toolkit">github.com/mahmoudelsheikh7/security_toolkit</a></footer>
+</main>
+<script>
+var D=[
+["Ubuntu / Debian / Mint","apt","ufw","apt-get install -y --no-install-recommends"],
+["Fedora","dnf","firewalld","dnf install -y"],
+["RHEL / Rocky / AlmaLinux","dnf (or yum)","firewalld","dnf install -y, after enabling EPEL"],
+["Arch / Manjaro","pacman","ufw","pacman -S --needed --noconfirm"],
+["openSUSE / SLES","zypper","firewalld","zypper --non-interactive install"],
+["Alpine","apk","ufw","apk add"],
+["Void","xbps","ufw","xbps-install -y"]];
+var s=document.getElementById("d"),o=document.getElementById("out");
+D.forEach(function(r,i){var e=document.createElement("option");e.value=i;e.textContent=r[0];s.appendChild(e)});
+function show(){var r=D[s.value];o.innerHTML="";
+[["Package manager",r[1]],["Firewall",r[2]],["Install command",r[3]]].forEach(function(p){
+var a=document.createElement("dt"),b=document.createElement("dd");a.textContent=p[0];b.textContent=p[1];
+if(p[0]==="Install command")b.className="mono";o.appendChild(a);o.appendChild(b)})}
+s.addEventListener("change",show);show();
+document.querySelectorAll("[data-copy]").forEach(function(b){b.addEventListener("click",function(){
+var t=document.getElementById(b.getAttribute("data-copy")).textContent;
+try{navigator.clipboard.writeText(t).then(function(){b.textContent="Copied";setTimeout(function(){b.textContent="Copy"},1500)},function(){b.textContent="Select and copy"})}catch(e){b.textContent="Select and copy"}})});
+</script>
+</body>
+</html>
