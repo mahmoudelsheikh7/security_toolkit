@@ -56,6 +56,20 @@ sudo ./security_toolkit --exclusions                       # interactive editor
 ./security_toolkit --scan /home --exclude-dir /home/me/VMs --exclude-ext .iso   # this run only
 ```
 
+## Run only some tools, and scan whole partitions or disks
+
+```bash
+sudo ./security_toolkit --run lynis rkhunter clamav /home   # only these tools (ids, numbers, 'rec')
+./security_toolkit --run scan /var                          # only the built-in file scanner
+./security_toolkit --list-disks                             # disks, partitions, mount points
+sudo ./security_toolkit --scan-disks                        # every mounted disk filesystem
+sudo ./security_toolkit --scan-disks sdb sda1 --clamav      # specific disks/partitions (+ ClamAV)
+```
+
+* `--run` runs each chosen tool's default check non-interactively; `scan` is the built-in scanner. Tools that need choices (OpenSCAP profile) are best started from `--manage`.
+* Disk scans never cross into other filesystems, so each partition is scanned once. Unmounted partitions are mounted read-only (`ro,noexec,nosuid,nodev`) at `/mnt/sectk-<name>`, scanned, then unmounted. Encrypted (LUKS), LVM and RAID members are skipped with a message: unlock or activate them and scan the mapped device.
+* Both are also in the interactive menu (options 8 and 9). Your scan exclusions apply.
+
 ## Usage
 
 ```bash

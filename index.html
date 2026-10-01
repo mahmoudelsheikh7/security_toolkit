@@ -98,6 +98,13 @@ sudo make install   # optional: installs to /usr/local/sbin</pre><button data-co
 <div class="cmd"><pre id="c3">sudo ./security_toolkit --exclusions
 ./security_toolkit --scan /home --exclude-dir /home/me/VMs --exclude-ext .iso</pre><button data-copy="c3">Copy</button></div>
 
+<h2>Run chosen tools, or scan whole disks</h2>
+<p>Run only the tools you pick, or scan entire partitions and disks. Unmounted partitions are mounted read-only for the scan and unmounted afterwards, and your exclusions still apply.</p>
+<div class="cmd"><pre id="c4">sudo ./security_toolkit --run lynis rkhunter clamav /home
+./security_toolkit --list-disks
+sudo ./security_toolkit --scan-disks                 # all mounted disks
+sudo ./security_toolkit --scan-disks sdb --clamav    # one disk + ClamAV</pre><button data-copy="c4">Copy</button></div>
+
 <h2>Usage</h2>
 <div class="cmd"><pre id="c2">sudo ./security_toolkit                 # interactive menu
 ./security_toolkit --tools              # list tools and what they do

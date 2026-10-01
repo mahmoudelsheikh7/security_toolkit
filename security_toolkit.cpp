@@ -882,7 +882,8 @@ class FileScanner {
 public:
     static const std::set<std::string> SUSPICIOUS_EXTS;
 
-    std::vector<ScanResult> scan(const std::string& rootPath, const Exclusions& ex = Exclusions()) {
+    std::vector<ScanResult> scan(const std::string& rootPath, const Exclusions& ex = Exclusions(),
+                                 bool oneFs = false) {
         results_.clear();
         scanned_ = 0;
         skippedDirs_ = 0;
@@ -899,6 +900,8 @@ public:
 
         // Iterative traversal: an error in one directory never aborts the scan,
         // symlinks are never followed, virtual filesystems are skipped.
+        dev_t rootDev = 0;
+        { struct stat rs{}; if (::stat(root.c_str(), &rs) == 0) rootDev = rs.st_dev; }
         std::vector<fs::path> stack{root};
         while (!stack.empty()) {
             fs::path dir = std::move(stack.back());
@@ -914,7 +917,9 @@ public:
                 const fs::file_status st = it->symlink_status(sec);
                 if (!sec) {
                     if (fs::is_directory(st)) {
+                        struct stat ds{};
                         if (ex.dirExcluded(it->path())) ++excluded_;
+                        else if (oneFs && (::lstat(it->path().c_str(), &ds) != 0 || ds.st_dev != rootDev)) ++excluded_;
                         else stack.push_back(it->path());
                     } else if (fs::is_regular_file(st)) {
                         if (ex.fileExcluded(it->path())) ++excluded_;
@@ -1664,18 +1669,11 @@ static void showLynisReport() {
 }
 
 // ---------- ClamAV scan ----------
+static void clamScanPath(const std::string& path, bool oneFs);
 static void clamScan() {
     std::string path;
     if (!ask("Directory or file to scan [/home] : ", path)) return;
-    if (path.empty()) path = "/home";
-    Exclusions ex; ex.loadEffective();
-    std::vector<std::string> cmd = {"clamscan", "-r", "-i",
-                                    "--exclude-dir=^/proc", "--exclude-dir=^/sys", "--exclude-dir=^/dev"};
-    for (const auto& r : ex.dirRegexes())  cmd.push_back("--exclude-dir=" + r);
-    for (const auto& r : ex.fileRegexes()) cmd.push_back("--exclude=" + r);
-    cmd.push_back(path);
-    Logger::info("Applying " + std::to_string(ex.total()) + " exclusion(s) from your scan exclusion list.");
-    runCmd(cmd);
+    clamScanPath(path.empty() ? "/home" : path, false);
 }
 
 // ---------- AIDE ----------
@@ -2016,6 +2014,8 @@ static void printMenu() {
               << "  [5] Quick firewall setup (secure defaults)\n"
               << "  [6] Quick setup: recommended tools + scan + firewall\n"
               << "  [7] Show log path\n"
+              << "  [8] Run only selected tools\n"
+              << "  [9] Scan whole partitions / disks\n"
               << "  [0] Exit\n"
               << "Choose an option: ";
 }
@@ -2029,6 +2029,10 @@ static void printHelp(const char* argv0) {
               << "  " << a << " --status               Show installed tools and service state\n"
               << "  " << a << " --install [tools]      Install tools (menu if none given; ids or 'rec')  (root)\n"
               << "  " << a << " --manage <tool>        Manage one tool: run, settings, edit config       (root)\n"
+              << "  " << a << " --run <tools> [path]   Run only these tools (ids, numbers, 'rec', 'scan')\n"
+              << "  " << a << " --list-disks            List disks, partitions and mount points\n"
+              << "  " << a << " --scan-disks [devs]     Scan whole partitions/disks (e.g. sdb, /dev/sda1);\n"
+              << "                             no device = every mounted disk filesystem  (root)\n"
               << "  " << a << " --scan [path]          Scan a directory (default: /home)\n"
               << "  " << a << " --exclusions           Edit saved scan exclusions\n"
               << "  " << a << " --firewall             Configure firewall defaults                     (root)\n"
@@ -2038,6 +2042,7 @@ static void printHelp(const char* argv0) {
               << "  --exclude-dir <path>    Skip a folder in this scan (repeatable)\n"
               << "  --exclude-ext <.ext>    Skip a file type in this scan (repeatable)\n"
               << "  --exclude-name <pat>    Skip a name/pattern in this scan (repeatable)\n"
+              << "      --clamav            Also run ClamAV during --scan-disks\n"
               << "  -y, --yes               Skip confirmation prompts (needed when not interactive)\n"
               << "      --no-color          Disable coloured output\n"
               << "\nTool ids:";
@@ -2077,6 +2082,264 @@ static void moduleScan(const std::string& path, const Exclusions& extra) {
     scanner.printReport(results);
 }
 
+// ---------- partitions and disks ----------
+struct Mnt { std::string src, target, fstype; };
+
+static std::string decodeMountField(const std::string& s) {
+    std::string out;
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == '\\' && i + 3 < s.size() + 0 && std::isdigit(static_cast<unsigned char>(s[i + 1])) &&
+            std::isdigit(static_cast<unsigned char>(s[i + 2])) && std::isdigit(static_cast<unsigned char>(s[i + 3]))) {
+            out += static_cast<char>(std::stoi(s.substr(i + 1, 3), nullptr, 8));
+            i += 3;
+        } else out += s[i];
+    }
+    return out;
+}
+
+static std::vector<Mnt> readMounts() {
+    std::vector<Mnt> v;
+    std::ifstream f("/proc/mounts");
+    std::string a, b, c, rest;
+    while (f >> a >> b >> c && std::getline(f, rest))
+        v.push_back({decodeMountField(a), decodeMountField(b), c});
+    return v;
+}
+
+static bool scannableFs(const std::string& t) {
+    static const std::set<std::string> ok = {"ext2", "ext3", "ext4", "xfs", "btrfs", "f2fs", "vfat", "exfat",
+        "ntfs", "ntfs3", "fuseblk", "jfs", "reiserfs", "hfsplus", "udf", "iso9660", "zfs"};
+    return ok.count(t) > 0;
+}
+
+struct BlockDev {
+    std::string kname, type, size, fstype, pk, model;
+    std::vector<std::string> mounts;
+    std::string path() const { return "/dev/" + kname; }
+};
+
+static std::string canon(const std::string& p) {
+    std::error_code ec;
+    fs::path c = fs::canonical(p, ec);
+    return ec ? p : c.string();
+}
+
+static std::vector<BlockDev> listBlockDevices() {
+    std::vector<BlockDev> devs;
+    if (!cmdExists("lsblk")) return devs;
+    std::string out;
+    if (captureCmd({"lsblk", "-P", "-o", "KNAME,TYPE,SIZE,FSTYPE,PKNAME,MODEL"}, out) != 0) return devs;
+    const auto mounts = readMounts();
+    std::istringstream iss(out);
+    std::string line;
+    static const std::regex kv(R"re((\w+)="([^"]*)")re");
+    while (std::getline(iss, line)) {
+        BlockDev d;
+        for (auto it = std::sregex_iterator(line.begin(), line.end(), kv); it != std::sregex_iterator(); ++it) {
+            const std::string k = (*it)[1], v = (*it)[2];
+            if (k == "KNAME") d.kname = v; else if (k == "TYPE") d.type = v; else if (k == "SIZE") d.size = v;
+            else if (k == "FSTYPE") d.fstype = v; else if (k == "PKNAME") d.pk = v; else if (k == "MODEL") d.model = trim(v);
+        }
+        if (d.kname.empty() || d.type == "loop" || d.type == "rom") continue;
+        const std::string me = canon(d.path());
+        for (const auto& m : mounts)
+            if (m.src.rfind("/dev/", 0) == 0 && canon(m.src) == me) d.mounts.push_back(m.target);
+        devs.push_back(d);
+    }
+    return devs;
+}
+
+static void printDisks(const std::vector<BlockDev>& devs) {
+    std::cout << "\n" << Color::p(Color::BOLD) << "Disks and partitions" << Color::p(Color::RESET) << "\n";
+    for (size_t i = 0; i < devs.size(); ++i) {
+        const auto& d = devs[i];
+        std::cout << "  [" << (i + 1 < 10 ? " " : "") << i + 1 << "] " << (d.pk.empty() ? "" : "  ") << d.path()
+                  << "  " << d.type << "  " << d.size;
+        if (!d.fstype.empty()) std::cout << "  " << d.fstype;
+        if (!d.model.empty())  std::cout << "  " << d.model;
+        if (!d.mounts.empty()) std::cout << "  mounted: " << join(d.mounts, ", ");
+        std::cout << "\n";
+    }
+}
+
+/** Disk -> all descendant devices that carry a filesystem; partition -> itself. */
+static void collectLeaves(const std::vector<BlockDev>& devs, const BlockDev& d, std::vector<const BlockDev*>& out) {
+    if (!d.fstype.empty() || !d.mounts.empty()) out.push_back(&d);
+    for (const auto& c : devs)
+        if (c.pk == d.kname) collectLeaves(devs, c, out);
+}
+
+static void clamScanPath(const std::string& path, bool oneFs) {
+    Exclusions ex; ex.loadEffective();
+    std::vector<std::string> cmd = {"clamscan", "-r", "-i",
+                                    "--exclude-dir=^/proc", "--exclude-dir=^/sys", "--exclude-dir=^/dev"};
+    if (oneFs) cmd.push_back("--cross-fs=no");
+    for (const auto& r : ex.dirRegexes())  cmd.push_back("--exclude-dir=" + r);
+    for (const auto& r : ex.fileRegexes()) cmd.push_back("--exclude=" + r);
+    cmd.push_back(path);
+    Logger::info("ClamAV scan of " + path + " (" + std::to_string(ex.total()) + " exclusion(s) applied).");
+    runCmd(cmd);
+}
+
+static void scanMountPoint(const std::string& label, const std::string& mp, bool clam, const Exclusions& ex) {
+    Logger::info("##### " + label + "  ->  " + mp);
+    FileScanner scanner;
+    scanner.printReport(scanner.scan(mp, ex, true));
+    if (clam) clamScanPath(mp, true);
+}
+
+/** Scan devices (e.g. /dev/sdb, sda1). Empty list = every mounted real filesystem. */
+static void scanDevices(const std::vector<std::string>& args, bool clam) {
+    if (!requireRoot("Scanning whole partitions and disks")) return;
+    if (clam && !cmdExists("clamscan")) { Logger::warn("ClamAV is not installed; using the built-in scanner only."); clam = false; }
+    Exclusions ex; ex.loadEffective();
+    std::set<std::string> done;
+
+    if (args.empty()) {
+        for (const auto& m : readMounts()) {
+            if (!scannableFs(m.fstype) || !done.insert(m.target).second) continue;
+            scanMountPoint(m.src + " (" + m.fstype + ")", m.target, clam, ex);
+        }
+        if (done.empty()) Logger::warn("No mounted disk filesystems found.");
+        return;
+    }
+
+    const auto devs = listBlockDevices();
+    if (devs.empty()) { Logger::error("Cannot list block devices (lsblk missing?)."); return; }
+    for (std::string a : args) {
+        if (a.rfind("/dev/", 0) == 0) a = a.substr(5);
+        const BlockDev* d = nullptr;
+        for (const auto& x : devs) if (x.kname == a) { d = &x; break; }
+        if (!d) { Logger::error("Unknown device: " + a + " (see --list-disks)"); continue; }
+
+        std::vector<const BlockDev*> leaves;
+        collectLeaves(devs, *d, leaves);
+        if (leaves.empty()) { Logger::warn(d->path() + " has no filesystem to scan."); continue; }
+        for (const BlockDev* l : leaves) {
+            if (!l->mounts.empty()) {
+                for (const auto& mp : l->mounts)
+                    if (done.insert(mp).second) scanMountPoint(l->path() + (l->fstype.empty() ? "" : " (" + l->fstype + ")"), mp, clam, ex);
+                continue;
+            }
+            if (!scannableFs(l->fstype)) {
+                Logger::warn("Skipping " + l->path() + ": " + l->fstype + " cannot be scanned directly "
+                             "(unlock/activate it first, then scan the mapped device).");
+                continue;
+            }
+            std::string opts = "ro,noexec,nosuid,nodev";
+            if (l->fstype.rfind("ext", 0) == 0) opts += ",noload";
+            else if (l->fstype == "xfs")        opts += ",norecovery";
+            const std::string mp = "/mnt/sectk-" + l->kname;
+            std::error_code ec;
+            fs::create_directories(mp, ec);
+            Logger::info("Mounting " + l->path() + " read-only at " + mp);
+            if (runCmd({"mount", "-o", opts, l->path(), mp}) != 0) {
+                Logger::error("Could not mount " + l->path() + "; skipped.");
+                fs::remove(mp, ec);
+                continue;
+            }
+            scanMountPoint(l->path() + " (" + l->fstype + ", temporary read-only mount)", mp, clam, ex);
+            runCmd({"umount", mp});
+            fs::remove(mp, ec);
+        }
+    }
+}
+
+static void diskMenu() {
+    if (!requireRoot("Scanning partitions and disks")) return;
+    const auto devs = listBlockDevices();
+    printDisks(devs);
+    std::cout << "\nChoose what to scan: numbers (e.g. 1 3), 'a' = every mounted disk filesystem, 0 = back\n"
+                 "A whole disk scans all its partitions; unmounted ones are mounted read-only temporarily.\n> ";
+    std::string in;
+    if (!readLine(in) || in.empty() || in == "0") return;
+    std::vector<std::string> args;
+    if (in != "a" && in != "all") {
+        std::istringstream iss(in);
+        std::string tok;
+        while (iss >> tok) {
+            if (isNumber(tok) && std::stoul(tok) >= 1 && std::stoul(tok) <= devs.size()) args.push_back(devs[std::stoul(tok) - 1].kname);
+            else Logger::warn("Ignoring: " + tok);
+        }
+        if (args.empty()) return;
+    }
+    bool clam = false;
+    if (cmdExists("clamscan")) {
+        std::string y;
+        clam = ask("Also run ClamAV on each? (slow on big disks) [y/N]: ", y) && toLower(y).rfind("y", 0) == 0;
+    }
+    scanDevices(args, clam);
+}
+
+// ---------- run chosen tools only ----------
+static void runToolDefault(const Tool& t, const std::string& path, const Exclusions& ex) {
+    const std::string& id = t.id;
+    Logger::info("===== Running " + t.name + " =====");
+    if (!isInstalled(t)) { Logger::warn(t.name + " is not installed; skipped."); return; }
+    if (id == "lynis") {
+        std::vector<std::string> c = {"lynis", "audit", "system", "--quick"};
+        if (!Color::enabled) c.push_back("--no-colors");
+        runCmd(c);
+    }
+    else if (id == "openscap") { if (::isatty(STDIN_FILENO)) runOpenScap(); else Logger::warn("OpenSCAP needs you to pick a profile: use --manage openscap."); }
+    else if (id == "apparmor")  runCmd({"aa-status"});
+    else if (id == "selinux")   runCmd({"sestatus"});
+    else if (id == "ufw")       runCmd({"ufw", "status", "verbose"});
+    else if (id == "firewalld") runCmd({"firewall-cmd", "--list-all"});
+    else if (id == "nftables")  runCmd({"nft", "list", "ruleset"});
+    else if (id == "fail2ban")  runCmd({"fail2ban-client", "status"});
+    else if (id == "clamav")    clamScanPath(path, false);
+    else if (id == "rkhunter")  runCmd({"rkhunter", "--check", "--sk", "--rwo"});
+    else if (id == "chkrootkit") runCmd({"chkrootkit", "-q"});
+    else if (id == "aide")      { auto c = aideBase(); c.push_back("--check"); runCmd(c); }
+    else if (id == "auditd")    runCmd({"aureport", "--summary"});
+    else if (id == "suricata")  runCmd({"suricata", "-T", "-c", "/etc/suricata/suricata.yaml", "-v"});
+    else if (id == "wazuh")     runCmd({"/var/ossec/bin/wazuh-control", "status"});
+    else if (id == "ossec")     runCmd({"/var/ossec/bin/ossec-control", "status"});
+    else if (id == "utils")     runCmd({"nmap", "-sT", "localhost"});
+    (void)ex;
+}
+
+/** tokens: tool ids/numbers, plus the pseudo-tool "scan" (built-in file scanner). */
+static void runToolsOnly(const std::vector<std::string>& tokens, const std::string& path, const Exclusions& extra) {
+    bool withScan = false;
+    std::vector<std::string> rest;
+    for (const auto& tk : tokens) {
+        std::string n = tk;
+        for (char& c : n) if (c == ',' || c == ';') c = ' ';
+        std::istringstream iss(n);
+        std::string w;
+        while (iss >> w) {
+            if (toLower(w) == "scan" || toLower(w) == "filescan") withScan = true; else rest.push_back(w);
+        }
+    }
+    const auto sel = parseSelection(join(rest, " "));
+    if (sel.empty() && !withScan) { Logger::error("No valid tools selected. See --tools for ids (add 'scan' for the file scanner)."); return; }
+    Exclusions ex; ex.loadEffective();
+    for (const auto& d : extra.dirs) ex.addDir(d);
+    for (const auto& e : extra.exts) ex.addExt(e);
+    for (const auto& s : extra.names) ex.addName(s);
+    if (!sel.empty() && !isRoot()) Logger::warn("Not root: some tools need sudo and may fail.");
+    if (withScan) moduleScan(path, extra);
+    for (const auto* t : sel) runToolDefault(*t, path, ex);
+    Logger::info("Finished running " + std::to_string(sel.size() + (withScan ? 1 : 0)) + " item(s).");
+}
+
+static void runToolsMenu() {
+    printStatusTable();
+    std::cout << "\nRun only these tools: numbers or names (e.g. 1 4 clamav), add 'scan' for the file scanner,\n"
+                 "'rec' = recommended, 0 = back\n> ";
+    std::string in;
+    if (!readLine(in) || in.empty() || in == "0") return;
+    std::string path = "/home";
+    std::string low = toLower(in);
+    if (low.find("scan") != std::string::npos || low.find("clamav") != std::string::npos || low.find('9') != std::string::npos) {
+        std::string p;
+        if (ask("Directory for scans [/home]: ", p) && !p.empty()) path = p;
+    }
+    runToolsOnly({in}, path, Exclusions());
+}
+
 static void moduleFirewall() {
     if (!requireRoot("Configuring the firewall")) return;
     FirewallManager fw;
@@ -2102,7 +2365,7 @@ struct Options {
     std::string path = "/home";
     std::vector<std::string> args;
     Exclusions extra;
-    bool noColor = false, bad = false;
+    bool noColor = false, bad = false, clam = false;
     std::string badArg;
 };
 
@@ -2128,12 +2391,17 @@ static Options parseArgs(int argc, char* argv[]) {
         else if (a == "--firewall")             o.cmd = "firewall";
         else if (a == "--exclusions")           o.cmd = "exclusions";
         else if (a == "--scan")                 o.cmd = "scan";
+        else if (a == "--run")                  o.cmd = "run";
+        else if (a == "--list-disks")           o.cmd = "disks";
+        else if (a == "--scan-disks")           o.cmd = "scandisks";
+        else if (a == "--clamav")               o.clam = true;
         else if (a == "--all")                  o.cmd = "all";
         else if (a == "--exclude-dir")  { if (need(i, v)) o.extra.dirs.push_back(v); }
         else if (a == "--exclude-ext")  { if (need(i, v)) o.extra.exts.push_back(v); }
         else if (a == "--exclude-name") { if (need(i, v)) o.extra.names.push_back(v); }
         else if (!a.empty() && a[0] != '-') {
-            if (o.cmd == "scan" || o.cmd == "all") o.path = a; else o.args.push_back(a);
+            if (o.cmd == "scan" || o.cmd == "all" || (o.cmd == "run" && a[0] == '/')) o.path = a;
+            else o.args.push_back(a);
         } else { o.bad = true; o.badArg = a; }
     }
     return o;
@@ -2170,6 +2438,8 @@ int main(int argc, char* argv[]) {
         return rc;
     }
 
+    if (opt.cmd == "disks") { printDisks(listBlockDevices()); return 0; }
+
     printBanner();
     Logger::info("Security Toolkit started (log: " + Logger::logPath() + ").");
 
@@ -2180,6 +2450,8 @@ int main(int argc, char* argv[]) {
         else if (opt.cmd == "firewall")   moduleFirewall();
         else if (opt.cmd == "all")        moduleAll(pm, opt.path, opt.extra);
         else if (opt.cmd == "exclusions") exclusionsMenu();
+        else if (opt.cmd == "run")        runToolsOnly(opt.args, opt.path, opt.extra);
+        else if (opt.cmd == "scandisks")  scanDevices(opt.args, opt.clam);
         else if (opt.cmd == "manage") {
             const Tool* t = opt.args.empty() ? nullptr : findTool(opt.args[0]);
             if (!t) { Logger::error("Usage: --manage <tool>. See --tools for ids."); return 1; }
@@ -2205,7 +2477,9 @@ int main(int argc, char* argv[]) {
         else if (choice == "5") moduleFirewall();
         else if (choice == "6") { if (requireRoot("Quick setup")) moduleAll(pm, promptPath(), Exclusions()); }
         else if (choice == "7") std::cout << "Log file: " << Logger::logPath() << "\n";
-        else std::cout << Color::p(Color::YELLOW) << "Invalid option. Please enter 0-7.\n" << Color::p(Color::RESET);
+        else if (choice == "8") runToolsMenu();
+        else if (choice == "9") diskMenu();
+        else std::cout << Color::p(Color::YELLOW) << "Invalid option. Please enter 0-9.\n" << Color::p(Color::RESET);
     }
 
     Logger::info("Security Toolkit finished.");
