@@ -45,7 +45,7 @@ footer{color:var(--mute);font-size:.9rem;margin-top:56px}
 <body>
 <main>
 <h1>Harden a Linux machine with one command</h1>
-<p class="lead">Security Toolkit installs common security tools, scans folders for suspicious files, and sets safe firewall defaults. It is a single C++17 program with no dependencies, and it works on Debian, Fedora, Arch, openSUSE, Alpine and Void families.</p>
+<p class="lead">Security Toolkit installs and manages 16 security tools, scans folders for suspicious files, and sets safe firewall defaults. It is a single C++17 program with no dependencies, and it works on Debian, Fedora, Arch, openSUSE, Alpine and Void families.</p>
 <div class="row">
   <a class="btn" href="https://github.com/mahmoudelsheikh7/security_toolkit/archive/refs/heads/main.zip">Download ZIP</a>
   <a href="https://github.com/mahmoudelsheikh7/security_toolkit">View on GitHub</a>
@@ -73,9 +73,36 @@ sudo make install   # optional: installs to /usr/local/sbin</pre><button data-co
   <dl id="out"></dl>
 </div>
 
+<h2>Supported tools</h2>
+<p>Pick any combination from the built-in catalog. Each tool is explained before you install it, and the toolkit warns you about conflicts such as AppArmor with SELinux.</p>
+<div class="scroll"><table>
+<tr><th>Tool</th><th>What it does</th></tr>
+<tr><td>Lynis</td><td>Audits the system and scores its hardening, with suggestions.</td></tr>
+<tr><td>OpenSCAP</td><td>Checks compliance against CIS/STIG-style profiles and writes an HTML report.</td></tr>
+<tr><td>AppArmor / SELinux</td><td>Mandatory access control: confine programs to what they need. Use only one.</td></tr>
+<tr><td>UFW / firewalld / nftables</td><td>Firewalls, from simple (ufw) to zone-based (firewalld) to raw rules (nftables). Use one.</td></tr>
+<tr><td>Fail2ban</td><td>Bans IPs that repeatedly fail logins, such as SSH brute-force.</td></tr>
+<tr><td>ClamAV</td><td>Antivirus scanner for files.</td></tr>
+<tr><td>rkhunter / chkrootkit</td><td>Rootkit and backdoor detection; two independent opinions.</td></tr>
+<tr><td>AIDE</td><td>File-integrity monitor: alerts when files change.</td></tr>
+<tr><td>auditd</td><td>Records who touched sensitive files and ran privileged actions.</td></tr>
+<tr><td>Suricata</td><td>Network intrusion detection from live traffic.</td></tr>
+<tr><td>Wazuh / OSSEC</td><td>Host-based intrusion detection and monitoring. Not in default repos; use one.</td></tr>
+</table></div>
+
+<h2>Manage and configure from the script</h2>
+<p>Open <code>Manage tools</code> to start, stop or enable a service, run the tool, change its settings (for example Fail2ban ban time and whitelist, firewall ports, auditd rules, SELinux mode) or edit its config file. A backup with the suffix <code>.sectk.bak</code> is made before every edit.</p>
+
+<h2>Exclude folders and file types from scans</h2>
+<p>Add folders, extensions (<code>.log</code>) or patterns (<code>node_modules</code>, <code>*.bak</code>) once; they are saved and reused by the scanner, ClamAV and AIDE.</p>
+<div class="cmd"><pre id="c3">sudo ./security_toolkit --exclusions
+./security_toolkit --scan /home --exclude-dir /home/me/VMs --exclude-ext .iso</pre><button data-copy="c3">Copy</button></div>
+
 <h2>Usage</h2>
 <div class="cmd"><pre id="c2">sudo ./security_toolkit                 # interactive menu
-sudo ./security_toolkit --install       # install security tools
+./security_toolkit --tools              # list tools and what they do
+sudo ./security_toolkit --install       # choose tools from a menu
+sudo ./security_toolkit --manage fail2ban  # run, settings, config, service
 ./security_toolkit --scan /home         # scan a folder (no root needed)
 sudo ./security_toolkit --firewall      # apply firewall defaults
 sudo ./security_toolkit --all /var      # install, scan, firewall

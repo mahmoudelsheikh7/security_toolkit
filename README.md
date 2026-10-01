@@ -28,20 +28,52 @@ sudo make install   # optional, installs to /usr/local/sbin
 
 Manual: `g++ -std=c++17 -Wall -Wextra -O2 security_toolkit.cpp -o security_toolkit` (GCC 8: append `-lstdc++fs`).
 
+## Supported tools (v3.0)
+
+| Category | Tools |
+|---|---|
+| Auditing | Lynis, OpenSCAP |
+| Access control | AppArmor, SELinux |
+| Firewall | UFW, firewalld, nftables |
+| Intrusion prevention | Fail2ban |
+| Malware and rootkits | ClamAV, rkhunter, chkrootkit |
+| Integrity and auditing | AIDE, auditd |
+| Network monitoring | Suricata, Wazuh, OSSEC |
+| Utilities | nmap, tcpdump, net-tools, curl, wget, unzip |
+
+The toolkit explains what each tool does (and its cautions) before you install, lets you pick any combination, warns about conflicts (AppArmor vs SELinux, several firewalls, Wazuh vs OSSEC), and then lets you manage each tool: start/stop/enable its service, run it, change its settings, or edit its config file (a `.sectk.bak` backup is made first).
+
+Guided settings include: Fail2ban ban time, find time, max retries, whitelist and SSH jail; UFW and firewalld ports; nftables baseline ruleset; auditd watch rules and log size; rkhunter options; SELinux mode; Suricata interface; Wazuh manager address; Lynis skipped tests; ClamAV update service and daemon.
+
+Wazuh and OSSEC are not in normal distro repositories: the toolkit tries your package manager and otherwise shows how to add the vendor repository.
+
+## Scan exclusions
+
+Exclude folders, file types (`.log`) or names/patterns (`node_modules`, `*.bak`) from scans. Entries are saved in `/etc/sec_toolkit/toolkit.conf` (root) or `~/.config/sec_toolkit/toolkit.conf`, and are reused by the file scanner, ClamAV scans and AIDE.
+
+```bash
+sudo ./security_toolkit --exclusions                       # interactive editor
+./security_toolkit --scan /home --exclude-dir /home/me/VMs --exclude-ext .iso   # this run only
+```
+
 ## Usage
 
 ```bash
-sudo ./security_toolkit                 # interactive menu
-sudo ./security_toolkit --install       # install tools
-./security_toolkit --scan /home         # scan (root not required)
-sudo ./security_toolkit --firewall      # apply firewall defaults
-sudo ./security_toolkit --all /var      # everything
-./security_toolkit --help
+sudo ./security_toolkit                  # interactive menu
+./security_toolkit --tools               # list tools and what they do
+./security_toolkit --info fail2ban       # explain one tool
+./security_toolkit --status              # installed tools and service state
+sudo ./security_toolkit --install        # pick tools from a menu
+sudo ./security_toolkit --install rec    # recommended baseline (or ids: lynis fail2ban ...)
+sudo ./security_toolkit --manage fail2ban  # run, settings, edit config, service control
+./security_toolkit --scan /home          # scan (root not required)
+sudo ./security_toolkit --firewall       # apply firewall defaults
+sudo ./security_toolkit --all /var       # recommended tools + scan + firewall
 ```
 
 Options: `-y/--yes` skips confirmation prompts (required when stdin is not a terminal), `--no-color` disables colour.
 
-## What changed in v2.0
+## What changed in v2.0 (still included)
 
 Fixes
 * `--help`, `--version` and `--scan` no longer demand root; only install and firewall do.
